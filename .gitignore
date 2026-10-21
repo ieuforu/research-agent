@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+coverage/
+*.tsbuildinfo
+.tanstack/
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+
+# Environment — never commit real credentials, only the example files
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+.idea/
+*.sw?
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# NOTE: web/src/routeTree.gen.ts is generated but IS committed on purpose.
+# `tsc` needs it, so a fresh clone must be able to run `pnpm typecheck` and CI
+# without running a dev server or a build first.

@@ -1,0 +1,24 @@
+{
+  "name": "research-agent",
+  "private": true,
+  "scripts": {
+    "dev:web": "pnpm --filter web dev",
+    "dev:server": "pnpm --filter server dev",
+    "build": "pnpm --filter web build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "typecheck:fast": "pnpm -r --if-present typecheck:fast",
+    "test": "pnpm -r --if-present test",
+    "check": "pnpm fmt:check && pnpm lint && pnpm typecheck && pnpm test",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check"
+  },
+  "devDependencies": {
+    "oxfmt": "^0.67.0",
+    "oxlint": "^1.82.0",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "typescript": "~7.0.2"
+  },
+  "packageManager": "pnpm@12.14.0"
+}

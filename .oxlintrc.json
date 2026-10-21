@@ -1,0 +1,29 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["react", "typescript", "oxc"],
+  "env": {
+    "builtin": true,
+    "node": true
+  },
+  "rules": {
+    "react/rules-of-hooks": "error",
+    "react/only-export-components": ["off", { "allowConstantExport": true }]
+  },
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.tanstack/**",
+    "**/routeTree.gen.ts",
+    "**/drizzle/**"
+  ],
+  "overrides": [
+    {
+      "files": ["web/src/**"],
+      "env": { "browser": true }
+    },
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx", "web/src/test/**"],
+      "env": { "vitest": true }
+    }
+  ]
+}
