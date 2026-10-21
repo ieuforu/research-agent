@@ -4,17 +4,13 @@ import { z } from 'zod'
 import { ai, model } from '../lib/ai.js'
 import { db } from '../db/index.js'
 import { researchTasks } from '../db/schema.js'
+import { abortExecution, registerExecution, unregisterExecution } from '../lib/lifecycle.js'
+import { increment } from '../lib/metrics.js'
 import { isSearchConfigured, searchWeb, type SearchResult } from '../lib/tavily.js'
 import { finish, publish, type ResearchSource } from '../lib/taskEvents.js'
 
 const ACTIVE_STATUSES = ['pending', 'running'] as const
 const MAX_SOURCES = 6
-
-/**
- * In-flight model calls, keyed by task id, so a cancel request can abort the
- * upstream HTTP request instead of only flipping a database column.
- */
-const inflight = new Map<string, AbortController>()
 
 const searchPlanSchema = z.object({
   queries: z.array(z.string()).default([]),
@@ -179,7 +175,8 @@ export async function executeResearch(taskId: string) {
   }
 
   const controller = new AbortController()
-  inflight.set(taskId, controller)
+  // Registered in the lifecycle registry so both cancel and shutdown can abort it.
+  registerExecution(taskId, controller)
 
   try {
     // Conditional update: if a cancel already moved the row out of `pending`,
@@ -236,6 +233,8 @@ export async function executeResearch(taskId: string) {
 
     const finalTask = updatedTask ?? (await getResearchTask(taskId))
 
+    if (updatedTask) increment('tasksCompleted')
+
     if (finalTask) {
       finish(taskId, { type: 'done', task: finalTask })
     }
@@ -259,11 +258,12 @@ export async function executeResearch(taskId: string) {
       })
       .where(and(eq(researchTasks.id, taskId), eq(researchTasks.status, 'running')))
 
+    increment('tasksFailed')
     finish(taskId, { type: 'error', message })
 
     throw error
   } finally {
-    inflight.delete(taskId)
+    unregisterExecution(taskId, controller)
   }
 }
 
@@ -304,9 +304,10 @@ export async function cancelResearch(taskId: string, userId: string): Promise<Ca
     return { outcome: 'conflict', task: (await findTaskForUser(taskId, userId)) ?? task }
   }
 
+  increment('tasksCancelled')
   publish(taskId, { type: 'status', status: 'cancelled' })
   finish(taskId, { type: 'done', task: updated })
-  inflight.get(taskId)?.abort()
+  abortExecution(taskId)
 
   return { outcome: 'cancelled', task: updated }
 }

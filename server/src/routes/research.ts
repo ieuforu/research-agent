@@ -4,6 +4,8 @@ import type { FastifyPluginAsync } from 'fastify'
 
 import { db } from '../db/index.js'
 import { researchTasks } from '../db/schema.js'
+import { isShuttingDown, onShutdown } from '../lib/lifecycle.js'
+import { increment, sseConnectionClosed, sseConnectionOpened } from '../lib/metrics.js'
 import { decodeCursor, encodeCursor } from '../lib/pagination.js'
 import { isTerminal, replay, subscribe, type ResearchEvent } from '../lib/taskEvents.js'
 import { cancelResearch, executeResearch, findTaskForUser } from '../services/research.js'
@@ -29,6 +31,12 @@ export const researchRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('onRequest', app.authenticate)
 
   app.post('/research', async (request, reply) => {
+    // Draining: refuse new work instead of accepting a task this process will
+    // never finish.
+    if (isShuttingDown()) {
+      return reply.code(503).send({ error: 'Server is shutting down' })
+    }
+
     const parsed = createResearchSchema.safeParse(request.body)
 
     if (!parsed.success) {
@@ -45,6 +53,8 @@ export const researchRoutes: FastifyPluginAsync = async (app) => {
         question: parsed.data.question,
       })
       .returning()
+
+    increment('tasksCreated')
 
     void executeResearch(task.id).catch((error) => {
       app.log.error({ err: error, taskId: task.id }, 'Research execution failed')
@@ -179,6 +189,11 @@ export const researchRoutes: FastifyPluginAsync = async (app) => {
       'x-accel-buffering': 'no',
     })
 
+    // Flush the headers immediately: without an initial byte the response head
+    // stays buffered and EventSource reports "connecting" until the first
+    // heartbeat 15s later. A comment line is the standard SSE opener.
+    response.write(': connected\n\n')
+
     const send = (event: ResearchEvent) => {
       response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
     }
@@ -204,9 +219,26 @@ export const researchRoutes: FastifyPluginAsync = async (app) => {
     const unsubscribe = subscribe(task.id, send)
     const heartbeat = setInterval(() => response.write(': ping\n\n'), 15_000)
 
-    request.raw.on('close', () => {
+    sseConnectionOpened()
+
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
       clearInterval(heartbeat)
       unsubscribe()
+      unregisterShutdown()
+      sseConnectionClosed()
+    }
+
+    // Hijacked responses are invisible to app.close(), so a drain has to end
+    // them explicitly or the process would wait on a client that never leaves.
+    const unregisterShutdown = onShutdown(() => {
+      send({ type: 'error', message: 'server shutting down' })
+      response.end()
+      release()
     })
+
+    request.raw.on('close', release)
   })
 }

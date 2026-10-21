@@ -4,6 +4,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { buildApp } from '../app.js'
 import { db } from '../db/index.js'
 import { researchTasks } from '../db/schema.js'
+import { beginShutdown, resetLifecycleForTests, runShutdownHandlers } from '../lib/lifecycle.js'
+import { countersSnapshot, openSseConnections, resetMetricsForTests } from '../lib/metrics.js'
 import { closeDatabase, createUser, resetDatabase, waitFor } from '../../test/helpers.js'
 
 const model = vi.hoisted(() => ({
@@ -66,6 +68,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetDatabase()
+  resetLifecycleForTests()
+  resetMetricsForTests()
   vi.clearAllMocks()
 
   owner = await createUser()
@@ -378,5 +382,83 @@ describe('GET /api/research/:id/stream', () => {
 
     expect(unknown.status).toBe(404)
     expect(notMine.status).toBe(404)
+  })
+})
+
+describe('request tracing', () => {
+  it('echoes an inbound request id', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/research',
+      headers: { ...auth, 'x-request-id': 'trace-abc-123' },
+    })
+
+    expect(response.headers['x-request-id']).toBe('trace-abc-123')
+  })
+
+  it('mints a request id when the caller did not send one', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/research', headers: auth })
+
+    expect(response.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/)
+  })
+})
+
+describe('observability', () => {
+  it('counts created and completed tasks', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/research',
+      headers: auth,
+      payload: { question: 'count me' },
+    })
+
+    const body = response.json() as { task: { id: string } }
+
+    await waitFor(async () => {
+      const [row] = await db
+        .select()
+        .from(researchTasks)
+        .where(eq(researchTasks.id, body.task.id))
+        .limit(1)
+
+      return row?.status === 'completed' ? row : undefined
+    })
+
+    const counters = countersSnapshot()
+
+    expect(counters.tasksCreated).toBe(1)
+    expect(counters.tasksCompleted).toBe(1)
+    expect(counters.tasksFailed).toBe(0)
+  })
+
+  it('refuses new tasks once draining', async () => {
+    beginShutdown()
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/research',
+      headers: auth,
+      payload: { question: 'too late' },
+    })
+
+    expect(response.statusCode).toBe(503)
+    expect(model.create).not.toHaveBeenCalled()
+  })
+
+  it('ends open SSE streams on shutdown so the process can exit', async () => {
+    const task = await insertTask('still running', new Date(), undefined)
+    await db.update(researchTasks).set({ status: 'running' }).where(eq(researchTasks.id, task.id))
+
+    const response = await fetch(`${baseUrl}/api/research/${task.id}/stream`, { headers: auth })
+
+    expect(response.status).toBe(200)
+    await waitFor(async () => openSseConnections() === 1)
+
+    expect(runShutdownHandlers()).toBe(1)
+
+    const payload = await new Response(response.body).text()
+
+    expect(payload).toContain('server shutting down')
+    expect(openSseConnections()).toBe(0)
   })
 })

@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto'
 import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance } from 'fastify'
 
 import authPlugin from './plugins/auth.js'
 import { authRoutes } from './routes/auth.js'
+import { metricsRoutes } from './routes/metrics.js'
 import { researchRoutes } from './routes/research.js'
 
 /**
@@ -12,6 +14,17 @@ import { researchRoutes } from './routes/research.js'
 export async function buildApp(options: { logger?: boolean } = {}): Promise<FastifyInstance> {
   const app = Fastify({
     logger: options.logger ?? true,
+    // Honour an inbound trace id so one request is greppable end to end across
+    // a proxy, otherwise mint one and log it.
+    genReqId: (request) => {
+      const header = request.headers['x-request-id']
+
+      return typeof header === 'string' && header.length > 0 ? header : randomUUID()
+    },
+  })
+
+  app.addHook('onSend', async (request, reply) => {
+    reply.header('x-request-id', request.id)
   })
 
   await app.register(cors, {
@@ -28,6 +41,7 @@ export async function buildApp(options: { logger?: boolean } = {}): Promise<Fast
   await app.register(authPlugin)
   await app.register(authRoutes, { prefix: '/api' })
   await app.register(researchRoutes, { prefix: '/api' })
+  await app.register(metricsRoutes, { prefix: '/api' })
 
   return app
 }

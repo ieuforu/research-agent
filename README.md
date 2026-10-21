@@ -111,6 +111,22 @@ node dist/index.js`; the migrator reads the committed `drizzle/` folder, so a
   packages published within that window; relying on each machine's global pnpm
   config instead would make Docker and CI builds fail for reasons nobody can see
   locally.
+- **Request ids flow through everything.** Fastify reuses an inbound
+  `x-request-id` or mints one, logs it on every line and echoes it back, so one
+  request is greppable from nginx to the model call.
+- **Metrics are internal by default.** Without `METRICS_TOKEN` the endpoint
+  answers 404 rather than exposing task counts; a scraper sends a bearer token.
+  The status distribution is read from Postgres at scrape time (survives
+  restarts), while counters and gauges are in-process.
+- **Shutdown order matters.** SIGTERM → refuse new work (503) → end SSE streams
+  explicitly → `app.close()` → wait out `SHUTDOWN_GRACE_MS` → abort whatever is
+  left → close the pool. Hijacked SSE responses are invisible to `app.close()`,
+  so without the explicit close the process would wait on a client that never
+  leaves. Aborted tasks stay `running` in the database and the next boot marks
+  them failed, which is why that recovery path exists.
+- **The SSE response is flushed with `: connected` before anything else.**
+  `writeHead` alone does not flush, so `EventSource` would sit in "connecting"
+  until the first heartbeat 15 seconds later.
 - **nginx disables proxying buffering on `/api/`.** Without it the SSE stream is
   buffered and the report appears all at once at the end.
 - **`web/src/routeTree.gen.ts` is committed on purpose.** `tsc` needs it, so a
@@ -161,6 +177,7 @@ migrated by `test/global-setup.ts`, so they never touch development data.
   marks stale rows as failed, it does not resume them)
 - no refresh tokens, no logout invalidation (the JWT stays valid until it expires)
 - no rate limiting, so a logged-in user can burn the model quota freely
-- no rate limiting, no request tracing or metrics endpoint
+- no rate limiting
 - single replica only: migrations on start and in-process task execution both
   assume one instance
+- metrics are pull-based JSON, not a Prometheus scrape format
