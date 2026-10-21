@@ -5,6 +5,8 @@
 A small research workbench: submit a question, the backend plans search queries,
 retrieves sources, and streams a cited report back to the browser.
 
+<img src="docs/preview.png" alt="The workbench: a question in the sidebar task list, six retrieved sources ranked by relevance, and a report whose superscript numbers link to those sources" width="880" />
+
 Built primarily as a **learning vehicle for the stack** (pnpm monorepo, TanStack
 Router/Query, Fastify 5, Drizzle, Postgres, SSE streaming), not as a product.
 
