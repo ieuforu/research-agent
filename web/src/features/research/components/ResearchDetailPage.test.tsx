@@ -64,7 +64,7 @@ const completedTask: ResearchTask = {
   sources: [{ title: '检索结果 A', url: 'https://example.com/a', snippet: 'A 的摘要' }],
 }
 
-function renderPage(task: ResearchTask, onBack = vi.fn()) {
+function renderPage(task: ResearchTask) {
   http.apiGet.mockResolvedValue({ task })
 
   const queryClient = new QueryClient({
@@ -73,11 +73,9 @@ function renderPage(task: ResearchTask, onBack = vi.fn()) {
 
   render(
     <QueryClientProvider client={queryClient}>
-      <ResearchDetailPage taskId={task.id} onBack={onBack} />
+      <ResearchDetailPage taskId={task.id} />
     </QueryClientProvider>,
   )
-
-  return { onBack }
 }
 
 beforeEach(() => {
@@ -94,9 +92,12 @@ describe('ResearchDetailPage', () => {
   it('renders a finished report with numbered sources', async () => {
     renderPage(completedTask)
 
-    expect(await screen.findByText(completedTask.report as string)).toBeInTheDocument()
-    expect(screen.getByText(/来源（1）/)).toBeInTheDocument()
-    expect(screen.getByText('[1] 检索结果 A')).toBeInTheDocument()
+    // The report is split into text nodes around the citation anchor.
+    expect(await screen.findByText(/MVCC 通过多版本实现读写不阻塞/)).toBeInTheDocument()
+    expect(screen.getByText('来源')).toBeInTheDocument()
+    expect(screen.getByText('检索结果 A')).toBeInTheDocument()
+    // 正文里的角标应指向来源锚点
+    expect(screen.getByRole('link', { name: '1' })).toHaveAttribute('href', '#source-1')
     // Finished tasks must not open a stream.
     expect(FakeEventSource.instances).toHaveLength(0)
   })
@@ -117,8 +118,8 @@ describe('ResearchDetailPage', () => {
     source.emit('token', { type: 'token', delta: '通过多版本' })
 
     expect(await screen.findByText('MVCC 通过多版本')).toBeInTheDocument()
-    expect(screen.getByText('[1] 实时来源')).toBeInTheDocument()
-    expect(screen.getByText('研究报告（生成中）')).toBeInTheDocument()
+    expect(screen.getByText('实时来源')).toBeInTheDocument()
+    expect(screen.getByText('研究报告')).toBeInTheDocument()
 
     source.emit('done', { type: 'done', task: completedTask })
 
@@ -129,7 +130,7 @@ describe('ResearchDetailPage', () => {
     http.apiPost.mockResolvedValue({ task: { ...runningTask, status: 'cancelled' } })
     renderPage(runningTask)
 
-    const cancelButton = await screen.findByRole('button', { name: /取消任务/ })
+    const cancelButton = await screen.findByRole('button', { name: /取消/ })
     await userEvent.click(cancelButton)
 
     await waitFor(() => {
@@ -142,7 +143,7 @@ describe('ResearchDetailPage', () => {
     renderPage(runningTask)
 
     expect(await screen.findByText(/实时流已断开/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /取消任务/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /取消/ })).toBeInTheDocument()
   })
 
   it('shows the failure reason for a failed task', async () => {

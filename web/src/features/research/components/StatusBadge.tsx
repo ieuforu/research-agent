@@ -10,17 +10,17 @@ const CONFIG: Record<ResearchStatus, { label: string; dot: string; chip: string 
   running: {
     label: '研究中',
     dot: 'bg-blue-500 animate-pulse',
-    chip: 'bg-blue-500/10 text-blue-600',
+    chip: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
   },
   completed: {
     label: '已完成',
     dot: 'bg-emerald-500',
-    chip: 'bg-emerald-500/10 text-emerald-600',
+    chip: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
   },
   failed: {
     label: '失败',
     dot: 'bg-red-500',
-    chip: 'bg-red-500/10 text-red-600',
+    chip: 'bg-red-500/10 text-red-600 dark:text-red-400',
   },
   cancelled: {
     label: '已取消',
@@ -35,7 +35,7 @@ export function StatusBadge({ status, className }: { status: ResearchStatus; cla
   return (
     <span
       className={cn(
-        'inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium',
+        'inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium',
         config.chip,
         className,
       )}
@@ -46,8 +46,40 @@ export function StatusBadge({ status, className }: { status: ResearchStatus; cla
   )
 }
 
+const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ['second', 60],
+  ['minute', 60],
+  ['hour', 24],
+  ['day', 30],
+  ['month', 12],
+  ['year', Number.POSITIVE_INFINITY],
+]
+
+const relativeFormatter = new Intl.RelativeTimeFormat('zh-CN', { numeric: 'auto' })
+
+/** "3 分钟前" style timestamps; the workbench shows many of these per screen. */
+export function formatRelativeTime(value: string, now = Date.now()): string {
+  const timestamp = new Date(value).getTime()
+
+  if (Number.isNaN(timestamp)) return ''
+
+  let delta = (timestamp - now) / 1000
+
+  for (const [unit, size] of RELATIVE_UNITS) {
+    if (Math.abs(delta) < size) return relativeFormatter.format(Math.round(delta), unit)
+
+    delta /= size
+  }
+
+  return ''
+}
+
 export function formatTimestamp(value: string): string {
-  return new Date(value).toLocaleString('zh-CN', {
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) return ''
+
+  return date.toLocaleString('zh-CN', {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',

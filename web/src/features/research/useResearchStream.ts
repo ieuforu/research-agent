@@ -5,6 +5,16 @@ import { openResearchStream } from './stream'
 import type { ResearchSource, ResearchStatus } from './types'
 
 interface ResearchStreamState {
+  /** Identity of the stream this state belongs to; a change resets everything. */
+  session: string
+  text: string
+  sources: ResearchSource[]
+  status: ResearchStatus | null
+  error: string | null
+  ended: boolean
+}
+
+interface ResearchStreamResult {
   text: string
   sources: ResearchSource[]
   status: ResearchStatus | null
@@ -12,43 +22,43 @@ interface ResearchStreamState {
   error: string | null
 }
 
-const EMPTY: ResearchStreamState = {
-  text: '',
-  sources: [],
-  status: null,
-  streaming: false,
-  error: null,
-}
-
 /**
  * Live view of an active task. Falls back to the query's polling when the
  * stream is unavailable, so the page never depends on SSE alone.
  */
-export function useResearchStream(taskId: string, enabled: boolean): ResearchStreamState {
+export function useResearchStream(taskId: string, enabled: boolean): ResearchStreamResult {
   const queryClient = useQueryClient()
-  const [state, setState] = useState<ResearchStreamState>(EMPTY)
+  const session = `${taskId}:${enabled ? 'on' : 'off'}`
+  const [state, setState] = useState<ResearchStreamState>({
+    session,
+    text: '',
+    sources: [],
+    status: null,
+    error: null,
+    ended: false,
+  })
   const closeRef = useRef<(() => void) | null>(null)
 
+  // Adjusting state during render (React's documented pattern for derived
+  // state) instead of resetting it inside an effect, which would render twice.
+  if (state.session !== session) {
+    setState({ session, text: '', sources: [], status: null, error: null, ended: false })
+  }
+
   useEffect(() => {
-    if (!enabled) {
-      setState(EMPTY)
-
-      return
-    }
-
-    setState({ ...EMPTY, streaming: true })
+    if (!enabled) return
 
     closeRef.current = openResearchStream(taskId, {
       onStatus: (status) => setState((prev) => ({ ...prev, status })),
       onSources: (sources) => setState((prev) => ({ ...prev, sources })),
       onToken: (delta) => setState((prev) => ({ ...prev, text: prev.text + delta })),
       onDone: (task) => {
-        setState((prev) => ({ ...prev, streaming: false }))
+        setState((prev) => ({ ...prev, ended: true }))
         queryClient.setQueryData(researchQueries.detail(task.id).queryKey, task)
         void queryClient.invalidateQueries({ queryKey: researchQueries.all() })
       },
       onError: (message) => {
-        setState((prev) => ({ ...prev, streaming: false, error: message }))
+        setState((prev) => ({ ...prev, ended: true, error: message }))
         // Polling picks up from here.
         void queryClient.invalidateQueries({ queryKey: researchQueries.detail(taskId).queryKey })
       },
@@ -60,5 +70,11 @@ export function useResearchStream(taskId: string, enabled: boolean): ResearchStr
     }
   }, [enabled, queryClient, taskId])
 
-  return state
+  return {
+    text: state.text,
+    sources: state.sources,
+    status: state.status,
+    error: state.error,
+    streaming: enabled && !state.ended,
+  }
 }

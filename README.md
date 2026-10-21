@@ -99,6 +99,26 @@ Open <http://localhost:5173/research>.
 | `TAVILY_BASE_URL`  | no       | override for stubs/proxies                       |
 | `WEB_ORIGIN`       | no       | CORS origin, defaults to `http://localhost:5173` |
 
+## Frontend structure
+
+```
+web/src/
+  routes/                 file-based routes, thin wrappers only
+    index.tsx             `/` redirects to /research or /login
+    _auth/                login, register
+    research/route.tsx    two-pane shell: sidebar + detail outlet
+    research/$taskId.tsx  detail pane
+  features/research/      api, queries, stream client, hook, components
+  features/auth/          api, session query, auth pages
+  components/ui/          Base UI primitives (button, card, dialog, input, label)
+  lib/                    http (ky + ApiError), auth (token), providers, queryClient
+```
+
+Pages never import router APIs: the layout resolves the active task and passes
+callbacks down, which keeps every component renderable in a test without a
+router. The generated template demos (marketing pages, dashboard/users/settings
+examples) were removed — the repo only contains the research app now.
+
 ## Tests
 
 `pnpm test` runs vitest in both packages (160 tests at the time of writing).

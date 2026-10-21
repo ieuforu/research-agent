@@ -280,7 +280,8 @@ describe('search integration', () => {
 
     expect(streamCall).toBeDefined()
 
-    const messages = (streamCall?.[0] as { messages: { content: string }[] }).messages
+    const [params] = streamCall as [{ messages: { content: string }[] }]
+    const messages = params.messages
     const references = messages.map((message) => message.content).join('\n')
 
     expect(references).toContain('[1] A — https://example.com/a')

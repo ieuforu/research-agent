@@ -18,22 +18,15 @@ export function AuthLayout() {
           className="mb-10 inline-flex items-center gap-2 text-[15px] font-semibold tracking-tight"
         >
           <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-foreground text-[13px] font-bold text-background">
-            S
+            R
           </div>
-          Starter
+          Research Agent
         </Link>
 
         <Outlet />
 
         <p className="mt-10 text-center text-[12px] text-muted-foreground/50">
-          By continuing, you agree to our{' '}
-          <span className="cursor-pointer text-muted-foreground/70 hover:text-foreground">
-            Terms
-          </span>{' '}
-          and{' '}
-          <span className="cursor-pointer text-muted-foreground/70 hover:text-foreground">
-            Privacy Policy
-          </span>
+          DeepSeek 生成 · 来源可核验
         </p>
       </div>
     </div>
