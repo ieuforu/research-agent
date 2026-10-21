@@ -4,7 +4,7 @@ import { db } from '../db/index.js'
 import { researchTasks } from '../db/schema.js'
 import { replay, subscribe, type ResearchEvent } from '../lib/taskEvents.js'
 import { cancelResearch, executeResearch } from './research.js'
-import { closeDatabase, resetDatabase, waitFor } from '../../test/helpers.js'
+import { closeDatabase, createUser, resetDatabase, waitFor } from '../../test/helpers.js'
 
 /**
  * The model and search layer are mocked: these tests are about the state
@@ -68,8 +68,13 @@ vi.mock('../lib/tavily.js', () => ({
   searchWeb: search.searchWeb,
 }))
 
-async function insertTask(question = 'what is mvcc') {
-  const [task] = await db.insert(researchTasks).values({ question }).returning()
+let owner: Awaited<ReturnType<typeof createUser>>
+
+async function insertTask(question = 'what is mvcc', userId?: string) {
+  const [task] = await db
+    .insert(researchTasks)
+    .values({ question, userId: userId ?? owner.id })
+    .returning()
 
   return task
 }
@@ -82,6 +87,7 @@ async function loadTask(id: string) {
 
 beforeEach(async () => {
   await resetDatabase()
+  owner = await createUser()
   vi.clearAllMocks()
   model.planContent = '{"queries":["query one"]}'
   model.deltas = ['first ', 'second']
@@ -121,7 +127,7 @@ describe('executeResearch', () => {
   it('skips execution when the task is not pending', async () => {
     const task = await insertTask()
 
-    await cancelResearch(task.id)
+    await cancelResearch(task.id, owner.id)
     model.create.mockClear()
 
     const result = await executeResearch(task.id)
@@ -176,7 +182,7 @@ describe('cancellation', () => {
     // test would only cover the pending-cancel path.
     await waitFor(async () => (await loadTask(task.id))?.status === 'running')
 
-    const cancelled = await cancelResearch(task.id)
+    const cancelled = await cancelResearch(task.id, owner.id)
     expect(cancelled.outcome).toBe('cancelled')
 
     release()
@@ -206,7 +212,7 @@ describe('cancellation', () => {
     const execution = executeResearch(task.id)
 
     await waitFor(async () => (await loadTask(task.id))?.status === 'running')
-    await cancelResearch(task.id)
+    await cancelResearch(task.id, owner.id)
 
     release()
     const settled = await execution
@@ -227,13 +233,15 @@ describe('cancellation', () => {
       .set({ status: 'completed', report: 'done' })
       .where(and(eq(researchTasks.id, task.id)))
 
-    const result = await cancelResearch(task.id)
+    const result = await cancelResearch(task.id, owner.id)
 
     expect(result.outcome).toBe('conflict')
   })
 
   it('reports not_found for an unknown id', async () => {
-    await expect(cancelResearch(crypto.randomUUID())).resolves.toEqual({ outcome: 'not_found' })
+    await expect(cancelResearch(crypto.randomUUID(), owner.id)).resolves.toEqual({
+      outcome: 'not_found',
+    })
   })
 })
 

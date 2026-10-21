@@ -6,7 +6,7 @@ import { db } from '../db/index.js'
 import { researchTasks } from '../db/schema.js'
 import { decodeCursor, encodeCursor } from '../lib/pagination.js'
 import { isTerminal, replay, subscribe, type ResearchEvent } from '../lib/taskEvents.js'
-import { cancelResearch, executeResearch, getResearchTask } from '../services/research.js'
+import { cancelResearch, executeResearch, findTaskForUser } from '../services/research.js'
 
 const statusSchema = z.enum(['pending', 'running', 'completed', 'failed', 'cancelled'])
 
@@ -25,6 +25,9 @@ const taskIdSchema = z.object({
 })
 
 export const researchRoutes: FastifyPluginAsync = async (app) => {
+  // Every research route requires a valid token; ownership is enforced per query.
+  app.addHook('onRequest', app.authenticate)
+
   app.post('/research', async (request, reply) => {
     const parsed = createResearchSchema.safeParse(request.body)
 
@@ -38,6 +41,7 @@ export const researchRoutes: FastifyPluginAsync = async (app) => {
     const [task] = await db
       .insert(researchTasks)
       .values({
+        userId: request.user.sub,
         question: parsed.data.question,
       })
       .returning()
@@ -71,6 +75,7 @@ export const researchRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const conditions = [
+      eq(researchTasks.userId, request.user.sub),
       status ? eq(researchTasks.status, status) : undefined,
       decoded
         ? sql`(${researchTasks.createdAt}, ${researchTasks.id}) < (${decoded.createdAt.toISOString()}::timestamptz, ${decoded.id}::uuid)`
@@ -110,11 +115,7 @@ export const researchRoutes: FastifyPluginAsync = async (app) => {
       })
     }
 
-    const [task] = await db
-      .select()
-      .from(researchTasks)
-      .where(eq(researchTasks.id, parsed.data.id))
-      .limit(1)
+    const task = await findTaskForUser(parsed.data.id, request.user.sub)
 
     if (!task) {
       return reply.code(404).send({
@@ -134,7 +135,7 @@ export const researchRoutes: FastifyPluginAsync = async (app) => {
       })
     }
 
-    const result = await cancelResearch(parsed.data.id)
+    const result = await cancelResearch(parsed.data.id, request.user.sub)
 
     if (result.outcome === 'not_found') {
       return reply.code(404).send({ error: 'Research task not found' })
@@ -162,7 +163,7 @@ export const researchRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: 'Invalid task ID' })
     }
 
-    const task = await getResearchTask(parsed.data.id)
+    const task = await findTaskForUser(parsed.data.id, request.user.sub)
 
     if (!task) {
       return reply.code(404).send({ error: 'Research task not found' })

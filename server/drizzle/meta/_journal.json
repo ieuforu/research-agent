@@ -8,6 +8,13 @@
       "when": 1792547137831,
       "tag": "0000_sparkling_blur",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792552295699,
+      "tag": "0001_curious_shooting_star",
+      "breakpoints": true
     }
   ]
 }

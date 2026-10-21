@@ -1,7 +1,26 @@
-import { pool } from '../src/db/index.js'
+import { db, pool } from '../src/db/index.js'
+import { users } from '../src/db/schema.js'
+import { hashPassword } from '../src/lib/password.js'
 
 export async function resetDatabase(): Promise<void> {
-  await pool.query('truncate table research_tasks restart identity cascade')
+  await pool.query('truncate table research_tasks, users restart identity cascade')
+}
+
+let userCounter = 0
+
+/** Inserts a user directly; auth flows are covered separately in routes/auth.test.ts. */
+export async function createUser(email?: string) {
+  userCounter += 1
+
+  const [user] = await db
+    .insert(users)
+    .values({
+      email: email ?? `user${userCounter}-${crypto.randomUUID()}@example.com`,
+      passwordHash: await hashPassword('correct horse battery staple'),
+    })
+    .returning()
+
+  return user
 }
 
 export async function closeDatabase(): Promise<void> {

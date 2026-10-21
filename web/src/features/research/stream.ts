@@ -1,3 +1,4 @@
+import { getAuthToken } from '#/lib/auth.ts'
 import { apiUrl } from '#/lib/http.ts'
 import type { ResearchSource, ResearchStatus, ResearchTask } from './types'
 
@@ -49,7 +50,11 @@ export function openResearchStream(taskId: string, handlers: ResearchStreamHandl
     return () => {}
   }
 
-  const source = new EventSource(apiUrl(`/research/${taskId}/stream`))
+  // EventSource cannot set an Authorization header, so the token travels as a
+  // query parameter. The backend only accepts query tokens on /stream.
+  const token = getAuthToken()
+  const query = token ? `?token=${encodeURIComponent(token)}` : ''
+  const source = new EventSource(apiUrl(`/research/${taskId}/stream${query}`))
   let closed = false
 
   const close = () => {

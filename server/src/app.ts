@@ -1,6 +1,8 @@
 import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance } from 'fastify'
 
+import authPlugin from './plugins/auth.js'
+import { authRoutes } from './routes/auth.js'
 import { researchRoutes } from './routes/research.js'
 
 /**
@@ -23,9 +25,9 @@ export async function buildApp(options: { logger?: boolean } = {}): Promise<Fast
     }
   })
 
-  await app.register(researchRoutes, {
-    prefix: '/api',
-  })
+  await app.register(authPlugin)
+  await app.register(authRoutes, { prefix: '/api' })
+  await app.register(researchRoutes, { prefix: '/api' })
 
   return app
 }

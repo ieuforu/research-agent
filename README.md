@@ -67,6 +67,16 @@ Open <http://localhost:5173/research>.
 - **Cursor, not offset.** New tasks are inserted at the top of the list, so
   offset pagination would duplicate or skip rows. The cursor is an opaque
   base64 `(created_at, id)` tuple used in a tuple comparison.
+- **Foreign resources answer 404, not 403.** Ownership is part of every query
+  (`where id = ? and user_id = ?`), so another user's task is indistinguishable
+  from a task that does not exist — a 403 would leak existence.
+- **Passwords are scrypt hashes with a per-user salt** (`node:crypto`, no native
+  build step). `verifyPassword` validates the decoded salt/key lengths before
+  `timingSafeEqual`: base64 decoding never throws, so a corrupted hash would
+  otherwise compare two empty buffers and accept every password.
+- **Query-string tokens are only accepted on `/stream`,** because `EventSource`
+  cannot set headers. Query strings leak into access logs and `Referer`, so the
+  backend rejects `?token=` everywhere else.
 - **Search degrades gracefully.** Without `TAVILY_API_KEY` the pipeline still
   writes a report, it just cannot cite sources — the prompt switches to
   forbidding citations instead of inventing them.
@@ -89,10 +99,16 @@ Open <http://localhost:5173/research>.
 | `TAVILY_BASE_URL`  | no       | override for stubs/proxies                       |
 | `WEB_ORIGIN`       | no       | CORS origin, defaults to `http://localhost:5173` |
 
+## Tests
+
+`pnpm test` runs vitest in both packages (160 tests at the time of writing).
+Server tests use a **separate `research_agent_test` database** created and
+migrated by `test/global-setup.ts`, so they never touch development data.
+
 ## Known gaps
 
-- no authentication: every request is anonymous and unscoped
-- no server-side tests yet (all 86 tests live in `web`)
 - execution is in-process: a crash loses in-flight work (startup recovery only
   marks stale rows as failed, it does not resume them)
+- no refresh tokens, no logout invalidation (the JWT stays valid until it expires)
+- no rate limiting, so a logged-in user can burn the model quota freely
 - no CI workflow, no Dockerfile for the app itself

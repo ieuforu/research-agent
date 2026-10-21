@@ -25,6 +25,17 @@ const BASE_SYSTEM_PROMPT =
 
 const NO_SEARCH_HINT = '当前未接入搜索工具，你只能依据自身知识作答，不得编造来源、链接或引用。'
 
+/** Ownership is part of the lookup, so a foreign task is indistinguishable from a missing one. */
+export async function findTaskForUser(taskId: string, userId: string) {
+  const [task] = await db
+    .select()
+    .from(researchTasks)
+    .where(and(eq(researchTasks.id, taskId), eq(researchTasks.userId, userId)))
+    .limit(1)
+
+  return task
+}
+
 export async function getResearchTask(taskId: string) {
   const [task] = await db.select().from(researchTasks).where(eq(researchTasks.id, taskId)).limit(1)
 
@@ -261,8 +272,8 @@ export type CancelOutcome =
   | { outcome: 'conflict'; task: typeof researchTasks.$inferSelect }
   | { outcome: 'not_found' }
 
-export async function cancelResearch(taskId: string): Promise<CancelOutcome> {
-  const task = await getResearchTask(taskId)
+export async function cancelResearch(taskId: string, userId: string): Promise<CancelOutcome> {
+  const task = await findTaskForUser(taskId, userId)
 
   if (!task) {
     return { outcome: 'not_found' }
@@ -279,12 +290,18 @@ export async function cancelResearch(taskId: string): Promise<CancelOutcome> {
       updatedAt: new Date(),
       error: null,
     })
-    .where(and(eq(researchTasks.id, taskId), inArray(researchTasks.status, [...ACTIVE_STATUSES])))
+    .where(
+      and(
+        eq(researchTasks.id, taskId),
+        eq(researchTasks.userId, userId),
+        inArray(researchTasks.status, [...ACTIVE_STATUSES]),
+      ),
+    )
     .returning()
 
   if (!updated) {
     // Lost the race against task completion.
-    return { outcome: 'conflict', task: (await getResearchTask(taskId)) ?? task }
+    return { outcome: 'conflict', task: (await findTaskForUser(taskId, userId)) ?? task }
   }
 
   publish(taskId, { type: 'status', status: 'cancelled' })

@@ -1,7 +1,8 @@
 import { redirect } from '@tanstack/react-router'
 
-// --- Mock auth state ---
-// In production, replace with real token/session validation
+// --- Session state ---
+// The token is a JWT issued by POST /api/auth/login; the backend is the only
+// thing that validates it, this just decides what the router renders.
 export function isAuthenticated(): boolean {
   return window.localStorage.getItem('auth_token') !== null
 }
@@ -29,6 +30,6 @@ export function requireAuth() {
 // Redirect logged-in users away from auth pages
 export function redirectIfAuthenticated() {
   if (isAuthenticated()) {
-    throw redirect({ to: '/examples' })
+    throw redirect({ to: '/research' })
   }
 }

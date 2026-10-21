@@ -8,10 +8,20 @@ export const researchStatus = pgEnum('research_status', [
   'cancelled',
 ])
 
+export const users = pgTable('users', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  email: text('email').notNull().unique(),
+  passwordHash: text('password_hash').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+})
+
 export const researchTasks = pgTable(
   'research_tasks',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
     question: text('question').notNull(),
     status: researchStatus('status').default('pending').notNull(),
     report: text('report'),
@@ -20,5 +30,9 @@ export const researchTasks = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
-  (table) => [index('research_tasks_created_at_idx').on(table.createdAt)],
+  (table) => [
+    // The workbench lists one user's tasks newest-first, so the composite index
+    // must lead with user_id — a plain created_at index would not serve it.
+    index('research_tasks_user_created_at_idx').on(table.userId, table.createdAt),
+  ],
 )

@@ -70,6 +70,24 @@ describe('openResearchStream', () => {
     close()
   })
 
+  it('appends the session token as a query parameter for EventSource', () => {
+    window.localStorage.setItem('auth_token', 'jwt-abc')
+    const close = openResearchStream(task.id, {})
+
+    expect(lastSource().url).toBe(`/api/research/${task.id}/stream?token=jwt-abc`)
+    close()
+    window.localStorage.clear()
+  })
+
+  it('encodes a token containing reserved characters', () => {
+    window.localStorage.setItem('auth_token', 'a+b/c==')
+    const close = openResearchStream(task.id, {})
+
+    expect(lastSource().url).toContain('?token=a%2Bb%2Fc%3D%3D')
+    close()
+    window.localStorage.clear()
+  })
+
   it('dispatches status, sources, token and done events', () => {
     const handlers = {
       onStatus: vi.fn(),

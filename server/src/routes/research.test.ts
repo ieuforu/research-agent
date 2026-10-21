@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { buildApp } from '../app.js'
 import { db } from '../db/index.js'
 import { researchTasks } from '../db/schema.js'
-import { closeDatabase, resetDatabase, waitFor } from '../../test/helpers.js'
+import { closeDatabase, createUser, resetDatabase, waitFor } from '../../test/helpers.js'
 
 const model = vi.hoisted(() => ({
   create: vi.fn(async (params: unknown) => {
@@ -30,11 +30,20 @@ vi.mock('../lib/tavily.js', () => ({
 
 let app: FastifyInstance
 let baseUrl: string
+let owner: Awaited<ReturnType<typeof createUser>>
+let auth: { authorization: string }
 
 type ListBody = { tasks: { id: string; question: string }[]; nextCursor: string | null }
 
-async function insertTask(question: string, createdAt: Date) {
-  const [task] = await db.insert(researchTasks).values({ question, createdAt }).returning()
+function tokenFor(user: { id: string; email: string }): string {
+  return app.jwt.sign({ sub: user.id, email: user.email })
+}
+
+async function insertTask(question: string, createdAt: Date, userId?: string) {
+  const [task] = await db
+    .insert(researchTasks)
+    .values({ question, createdAt, userId: userId ?? owner.id })
+    .returning()
 
   return task
 }
@@ -58,11 +67,43 @@ afterAll(async () => {
 beforeEach(async () => {
   await resetDatabase()
   vi.clearAllMocks()
+
+  owner = await createUser()
+  auth = { authorization: `Bearer ${tokenFor(owner)}` }
+})
+
+describe('authentication', () => {
+  it.each([
+    { method: 'GET' as const, url: '/api/research' },
+    { method: 'POST' as const, url: '/api/research' },
+    { method: 'GET' as const, url: '/api/research/11111111-1111-4111-8111-111111111111' },
+    { method: 'POST' as const, url: '/api/research/11111111-1111-4111-8111-111111111111/cancel' },
+    { method: 'GET' as const, url: '/api/research/11111111-1111-4111-8111-111111111111/stream' },
+  ])('rejects $method $url without a token', async ({ method, url }) => {
+    const response = await app.inject({ method, url })
+
+    expect(response.statusCode).toBe(401)
+  })
+
+  it('rejects a malformed token', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/research',
+      headers: { authorization: 'Bearer not-a-jwt' },
+    })
+
+    expect(response.statusCode).toBe(401)
+  })
 })
 
 describe('POST /api/research', () => {
   it('rejects a missing question', async () => {
-    const response = await app.inject({ method: 'POST', url: '/api/research', payload: {} })
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/research',
+      headers: auth,
+      payload: {},
+    })
 
     expect(response.statusCode).toBe(400)
     expect(response.json()).toMatchObject({ error: 'Invalid request' })
@@ -72,6 +113,7 @@ describe('POST /api/research', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/research',
+      headers: auth,
       payload: { question: '  what is mvcc  ' },
     })
 
@@ -93,6 +135,7 @@ describe('POST /api/research', () => {
     })
 
     expect(completed.report).toBe('report body')
+    expect(completed.userId).toBe(owner.id)
   })
 })
 
@@ -110,7 +153,7 @@ describe('GET /api/research', () => {
 
     do {
       const url: string = `/api/research?limit=2${cursor ? `&cursor=${cursor}` : ''}`
-      const response = await app.inject({ method: 'GET', url })
+      const response = await app.inject({ method: 'GET', url, headers: auth })
 
       expect(response.statusCode).toBe(200)
 
@@ -125,6 +168,19 @@ describe('GET /api/research', () => {
     expect(collected).toEqual(expected.map((task) => task.id))
   })
 
+  it('never returns another user’s tasks', async () => {
+    const stranger = await createUser()
+
+    await insertTask('mine', new Date('2026-10-21T03:00:00.000Z'))
+    const foreign = await insertTask('theirs', new Date('2026-10-21T04:00:00.000Z'), stranger.id)
+
+    const response = await app.inject({ method: 'GET', url: '/api/research', headers: auth })
+    const body = response.json() as ListBody
+
+    expect(body.tasks.map((task) => task.question)).toEqual(['mine'])
+    expect(body.tasks.map((task) => task.id)).not.toContain(foreign.id)
+  })
+
   it('filters by status', async () => {
     const pending = await insertTask('pending one', new Date('2026-10-21T03:00:00.000Z'))
 
@@ -134,15 +190,27 @@ describe('GET /api/research', () => {
       .set({ status: 'completed', report: 'x' })
       .where(eq(researchTasks.question, 'completed one'))
 
-    const response = await app.inject({ method: 'GET', url: '/api/research?status=pending' })
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/research?status=pending',
+      headers: auth,
+    })
     const body = response.json() as ListBody
 
     expect(body.tasks.map((task) => task.id)).toEqual([pending.id])
   })
 
   it('rejects an invalid cursor and out-of-range limits', async () => {
-    const badCursor = await app.inject({ method: 'GET', url: '/api/research?cursor=nope!!' })
-    const badLimit = await app.inject({ method: 'GET', url: '/api/research?limit=0' })
+    const badCursor = await app.inject({
+      method: 'GET',
+      url: '/api/research?cursor=nope!!',
+      headers: auth,
+    })
+    const badLimit = await app.inject({
+      method: 'GET',
+      url: '/api/research?limit=0',
+      headers: auth,
+    })
 
     expect(badCursor.statusCode).toBe(400)
     expect(badLimit.statusCode).toBe(400)
@@ -155,7 +223,7 @@ describe('GET /api/research', () => {
       .set({ status: 'completed', report: 'a long report' })
       .where(eq(researchTasks.question, 'with report'))
 
-    const response = await app.inject({ method: 'GET', url: '/api/research' })
+    const response = await app.inject({ method: 'GET', url: '/api/research', headers: auth })
     const body = response.json() as { tasks: Record<string, unknown>[] }
 
     expect(body.tasks[0]).not.toHaveProperty('report')
@@ -165,18 +233,40 @@ describe('GET /api/research', () => {
 
 describe('GET /api/research/:id', () => {
   it('validates, 404s and returns the full task', async () => {
-    const invalid = await app.inject({ method: 'GET', url: '/api/research/not-a-uuid' })
+    const invalid = await app.inject({
+      method: 'GET',
+      url: '/api/research/not-a-uuid',
+      headers: auth,
+    })
     const missing = await app.inject({
       method: 'GET',
       url: `/api/research/${crypto.randomUUID()}`,
+      headers: auth,
     })
     const task = await insertTask('detail', new Date('2026-10-21T03:00:00.000Z'))
-    const found = await app.inject({ method: 'GET', url: `/api/research/${task.id}` })
+    const found = await app.inject({
+      method: 'GET',
+      url: `/api/research/${task.id}`,
+      headers: auth,
+    })
 
     expect(invalid.statusCode).toBe(400)
     expect(missing.statusCode).toBe(404)
     expect(found.statusCode).toBe(200)
     expect(found.json()).toMatchObject({ task: { id: task.id, status: 'pending' } })
+  })
+
+  it('answers 404 — not 403 — for another user’s task', async () => {
+    const stranger = await createUser()
+    const foreign = await insertTask('theirs', new Date('2026-10-21T03:00:00.000Z'), stranger.id)
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/research/${foreign.id}`,
+      headers: auth,
+    })
+
+    expect(response.statusCode).toBe(404)
   })
 })
 
@@ -187,6 +277,7 @@ describe('POST /api/research/:id/cancel', () => {
     const response = await app.inject({
       method: 'POST',
       url: `/api/research/${task.id}/cancel`,
+      headers: auth,
     })
 
     expect(response.statusCode).toBe(200)
@@ -203,14 +294,36 @@ describe('POST /api/research/:id/cancel', () => {
     const conflict = await app.inject({
       method: 'POST',
       url: `/api/research/${task.id}/cancel`,
+      headers: auth,
     })
     const missing = await app.inject({
       method: 'POST',
       url: `/api/research/${crypto.randomUUID()}/cancel`,
+      headers: auth,
     })
 
     expect(conflict.statusCode).toBe(409)
     expect(missing.statusCode).toBe(404)
+  })
+
+  it('cannot cancel another user’s task', async () => {
+    const stranger = await createUser()
+    const foreign = await insertTask('theirs', new Date('2026-10-21T03:00:00.000Z'), stranger.id)
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/research/${foreign.id}/cancel`,
+      headers: auth,
+    })
+
+    expect(response.statusCode).toBe(404)
+
+    const [unchanged] = await db
+      .select()
+      .from(researchTasks)
+      .where(eq(researchTasks.id, foreign.id))
+
+    expect(unchanged.status).toBe('pending')
   })
 })
 
@@ -222,7 +335,7 @@ describe('GET /api/research/:id/stream', () => {
       .set({ status: 'completed', report: 'streamed body' })
       .where(eq(researchTasks.id, task.id))
 
-    const response = await fetch(`${baseUrl}/api/research/${task.id}/stream`)
+    const response = await fetch(`${baseUrl}/api/research/${task.id}/stream`, { headers: auth })
 
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toContain('text/event-stream')
@@ -233,9 +346,37 @@ describe('GET /api/research/:id/stream', () => {
     expect(payload).toContain('streamed body')
   })
 
-  it('404s for an unknown task', async () => {
-    const response = await fetch(`${baseUrl}/api/research/${crypto.randomUUID()}/stream`)
+  it('accepts the token as a query parameter, because EventSource cannot set headers', async () => {
+    const task = await insertTask('query token', new Date('2026-10-21T03:00:00.000Z'))
+    await db
+      .update(researchTasks)
+      .set({ status: 'completed', report: 'via query token' })
+      .where(eq(researchTasks.id, task.id))
 
-    expect(response.status).toBe(404)
+    const response = await fetch(
+      `${baseUrl}/api/research/${task.id}/stream?token=${tokenFor(owner)}`,
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('via query token')
+  })
+
+  it('rejects a query token on non-stream endpoints', async () => {
+    const response = await fetch(`${baseUrl}/api/research?token=${tokenFor(owner)}`)
+
+    expect(response.status).toBe(401)
+  })
+
+  it('404s for an unknown task and for another user’s task', async () => {
+    const stranger = await createUser()
+    const foreign = await insertTask('theirs', new Date('2026-10-21T03:00:00.000Z'), stranger.id)
+
+    const unknown = await fetch(`${baseUrl}/api/research/${crypto.randomUUID()}/stream`, {
+      headers: auth,
+    })
+    const notMine = await fetch(`${baseUrl}/api/research/${foreign.id}/stream`, { headers: auth })
+
+    expect(unknown.status).toBe(404)
+    expect(notMine.status).toBe(404)
   })
 })

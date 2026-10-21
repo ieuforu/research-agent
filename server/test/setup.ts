@@ -6,3 +6,5 @@ import { resolveTestUrl } from './database.js'
 process.env.DATABASE_URL = resolveTestUrl()
 process.env.DEEPSEEK_API_KEY ??= 'test-deepseek-key'
 process.env.DEEPSEEK_MODEL ??= 'deepseek-chat'
+process.env.JWT_SECRET ??= 'test-jwt-secret'
+process.env.JWT_EXPIRES_IN ??= '1h'
