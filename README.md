@@ -127,6 +127,11 @@ node dist/index.js`; the migrator reads the committed `drizzle/` folder, so a
 - **The SSE response is flushed with `: connected` before anything else.**
   `writeHead` alone does not flush, so `EventSource` would sit in "connecting"
   until the first heartbeat 15 seconds later.
+- **The request serializer redacts `?token=`.** The SSE endpoint needs the token
+  in the query string (EventSource cannot set headers), so the logger rewrites it
+  to `token=redacted`. Note this has to live inside the logger options: Fastify
+  only merges the top-level `serializers` shortcut when it builds the logger
+  itself, so passing an explicit logger object silently bypassed it at first.
 - **nginx disables proxying buffering on `/api/`.** Without it the SSE stream is
   buffered and the report appears all at once at the end.
 - **`web/src/routeTree.gen.ts` is committed on purpose.** `tsc` needs it, so a
