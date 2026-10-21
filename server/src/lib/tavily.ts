@@ -11,6 +11,9 @@ const searchResponseSchema = z.object({
         title: z.string().optional(),
         url: z.string(),
         content: z.string().optional(),
+        // Relevance in 0..1. Kept so the pipeline can rank and filter instead of
+        // trusting whichever query happened to run first.
+        score: z.number().optional(),
       }),
     )
     .default([]),
@@ -20,6 +23,8 @@ export interface SearchResult {
   title: string
   url: string
   snippet: string
+  /** Absent for providers that do not report relevance. */
+  score?: number
 }
 
 /**
@@ -65,5 +70,6 @@ export async function searchWeb(
     title: result.title?.trim() || result.url,
     url: result.url,
     snippet: (result.content ?? '').trim().slice(0, 500),
+    score: result.score,
   }))
 }

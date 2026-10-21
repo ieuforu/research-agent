@@ -54,7 +54,7 @@ const model = vi.hoisted(() => {
 
 const search = vi.hoisted(() => ({
   configured: false,
-  results: [] as { title: string; url: string; snippet: string }[],
+  results: [] as { title: string; url: string; snippet: string; score?: number }[],
   searchWeb: vi.fn(async () => search.results),
 }))
 
@@ -267,6 +267,78 @@ describe('search integration', () => {
       'https://example.com/a',
       'https://example.com/b',
     ])
+  })
+
+  it('drops results below the relevance floor', async () => {
+    search.results = [
+      { title: 'good', url: 'https://example.com/good', snippet: 'g', score: 0.9 },
+      { title: 'noise', url: 'https://example.com/noise', snippet: 'n', score: 0.02 },
+    ]
+    const task = await insertTask()
+
+    const finished = await executeResearch(task.id)
+
+    expect(finished?.sources?.map((source) => source.url)).toEqual(['https://example.com/good'])
+  })
+
+  it('ranks the union of all queries by score, not by query order', async () => {
+    // The first query returns a mediocre hit, the second a strong one: the
+    // strong one must be cited first even though it arrived later.
+    search.searchWeb
+      .mockResolvedValueOnce([
+        { title: 'weak', url: 'https://example.com/weak', snippet: 'w', score: 0.25 },
+      ])
+      .mockResolvedValueOnce([
+        { title: 'strong', url: 'https://example.com/strong', snippet: 's', score: 0.8 },
+      ])
+    const task = await insertTask()
+
+    const finished = await executeResearch(task.id)
+
+    expect(finished?.sources?.map((source) => source.url)).toEqual([
+      'https://example.com/strong',
+      'https://example.com/weak',
+    ])
+  })
+
+  it('keeps results from providers that report no score', async () => {
+    search.results = [{ title: 'unscored', url: 'https://example.com/u', snippet: 'u' }]
+    const task = await insertTask()
+
+    const finished = await executeResearch(task.id)
+
+    expect(finished?.sources).toHaveLength(1)
+  })
+
+  it('keeps the best score when the same url comes back from several queries', async () => {
+    search.searchWeb
+      .mockResolvedValueOnce([
+        { title: 'dup-low', url: 'https://example.com/dup', snippet: 'a', score: 0.3 },
+      ])
+      .mockResolvedValueOnce([
+        { title: 'dup-high', url: 'https://example.com/dup', snippet: 'b', score: 0.7 },
+      ])
+    const task = await insertTask()
+
+    const finished = await executeResearch(task.id)
+
+    expect(finished?.sources).toHaveLength(1)
+    expect(finished?.sources?.[0]).toMatchObject({ title: 'dup-high' })
+  })
+
+  it('tells the model that retrieval found nothing when everything was filtered out', async () => {
+    search.results = [{ title: 'noise', url: 'https://example.com/n', snippet: 'n', score: 0.01 }]
+    const task = await insertTask()
+
+    await executeResearch(task.id)
+
+    const streamCall = model.create.mock.calls.find(
+      ([params]) => (params as { stream?: boolean }).stream === true,
+    )
+    const [params] = streamCall as [{ messages: { content: string }[] }]
+
+    expect(params.messages[0].content).toContain('已检索但没有找到相关资料')
+    expect(params.messages[0].content).not.toContain('未接入搜索工具')
   })
 
   it('feeds numbered references into the synthesis prompt', async () => {

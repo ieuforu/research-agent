@@ -12,6 +12,14 @@ import { finish, publish, type ResearchSource } from '../lib/taskEvents.js'
 const ACTIVE_STATUSES = ['pending', 'running'] as const
 const MAX_SOURCES = 6
 
+/**
+ * Tavily scores relevance in 0..1. Anything below this is noise: a mis-planned
+ * query (an ambiguous acronym, say) can still return hits that outrank the good
+ * results from a better query, so the tail is dropped rather than fed to the
+ * model as if it were evidence.
+ */
+const MIN_SEARCH_SCORE = Number(process.env.SEARCH_MIN_SCORE ?? 0.2)
+
 const searchPlanSchema = z.object({
   queries: z.array(z.string()).default([]),
 })
@@ -19,7 +27,13 @@ const searchPlanSchema = z.object({
 const BASE_SYSTEM_PROMPT =
   '你是一名严谨的研究助手。请用中文回答用户的研究问题，明确区分事实、推断和不确定信息。'
 
-const NO_SEARCH_HINT = '当前未接入搜索工具，你只能依据自身知识作答，不得编造来源、链接或引用。'
+// Distinguishing "search is off" from "search ran and found nothing" keeps the
+// model honest without it claiming a tool it never had.
+const NO_SEARCH_HINTS = {
+  notConfigured: '当前未接入搜索工具，你只能依据自身知识作答，不得编造来源、链接或引用。',
+  noHits:
+    '已检索但没有找到相关资料，请只依据自身知识作答，并明确说明缺少资料支撑，不得编造来源、链接或引用。',
+}
 
 /** Ownership is part of the lookup, so a foreign task is indistinguishable from a missing one. */
 export async function findTaskForUser(taskId: string, userId: string) {
@@ -49,7 +63,7 @@ async function planSearchQueries(question: string, signal: AbortSignal): Promise
           {
             role: 'system',
             content:
-              '你是检索规划器。根据用户的研究问题，输出 1 到 3 条用于网络搜索的查询语句，语言与问题一致，具体且可直接搜索。只输出 JSON：{"queries": ["..."]}',
+              '你是检索规划器。根据用户的研究问题，输出 1 到 3 条用于网络搜索的查询语句。要求：语言与问题一致；每条查询必须自洽可独立理解；把专业名词和缩写写全（例如写 "React Server Components" 而不是 "RSC"），避免缩写歧义；不要使用泛化词。只输出 JSON：{"queries": ["..."]}',
           },
           { role: 'user', content: question },
         ],
@@ -74,35 +88,47 @@ async function planSearchQueries(question: string, signal: AbortSignal): Promise
   }
 }
 
-/** Runs every query, de-duplicates by URL and keeps the first MAX_SOURCES hits. */
+/**
+ * Runs every query, then ranks the union by relevance.
+ *
+ * Ordering matters: collecting per query meant the first query's five results
+ * always beat everything else, so one badly planned query could fill the whole
+ * citation list. Sorting globally means the best sources win regardless of which
+ * query produced them.
+ */
 async function gatherSources(queries: string[], signal: AbortSignal): Promise<ResearchSource[]> {
   const settled = await Promise.allSettled(
     queries.map((query) => searchWeb(query, { maxResults: 5, signal })),
   )
 
-  const seen = new Set<string>()
-  const sources: ResearchSource[] = []
+  const bestByUrl = new Map<string, SearchResult>()
 
   for (const result of settled) {
     if (result.status !== 'fulfilled') continue
 
     for (const item of result.value as SearchResult[]) {
-      if (seen.has(item.url)) continue
+      if (item.score !== undefined && item.score < MIN_SEARCH_SCORE) continue
 
-      seen.add(item.url)
-      sources.push(item)
+      const existing = bestByUrl.get(item.url)
 
-      if (sources.length >= MAX_SOURCES) return sources
+      // The same url can come back from several queries with different scores.
+      if (!existing || (item.score ?? 0) > (existing.score ?? 0)) {
+        bestByUrl.set(item.url, item)
+      }
     }
   }
 
-  return sources
+  return [...bestByUrl.values()]
+    .sort((left, right) => (right.score ?? 0) - (left.score ?? 0))
+    .slice(0, MAX_SOURCES)
 }
 
-function buildMessages(question: string, sources: ResearchSource[]) {
+function buildMessages(question: string, sources: ResearchSource[], searchAttempted: boolean) {
   if (sources.length === 0) {
+    const hint = searchAttempted ? NO_SEARCH_HINTS.noHits : NO_SEARCH_HINTS.notConfigured
+
     return [
-      { role: 'system' as const, content: `${BASE_SYSTEM_PROMPT}${NO_SEARCH_HINT}` },
+      { role: 'system' as const, content: `${BASE_SYSTEM_PROMPT}${hint}` },
       { role: 'user' as const, content: question },
     ]
   }
@@ -134,15 +160,16 @@ async function streamReport(options: {
   taskId: string
   question: string
   sources: ResearchSource[]
+  searchAttempted: boolean
   signal: AbortSignal
 }): Promise<string> {
-  const { taskId, question, sources, signal } = options
+  const { taskId, question, sources, searchAttempted, signal } = options
 
   const stream = await ai.chat.completions.create(
     {
       model,
       stream: true,
-      messages: buildMessages(question, sources),
+      messages: buildMessages(question, sources, searchAttempted),
     },
     { signal },
   )
@@ -198,8 +225,9 @@ export async function executeResearch(taskId: string) {
     publish(taskId, { type: 'status', status: 'running' })
 
     let sources: ResearchSource[] = []
+    const searchAttempted = isSearchConfigured()
 
-    if (isSearchConfigured()) {
+    if (searchAttempted) {
       const queries = await planSearchQueries(started.question, controller.signal)
       sources = await gatherSources(queries, controller.signal)
 
@@ -212,6 +240,7 @@ export async function executeResearch(taskId: string) {
       taskId,
       question: started.question,
       sources,
+      searchAttempted,
       signal: controller.signal,
     })
 

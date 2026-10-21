@@ -98,6 +98,15 @@ same frontend build works in both setups.
 - **Query-string tokens are only accepted on `/stream`,** because `EventSource`
   cannot set headers. Query strings leak into access logs and `Referer`, so the
   backend rejects `?token=` everywhere else.
+- **Retrieval is ranked, not first-come.** Every planned query runs, then the
+  union is de-duplicated by url (keeping the best score), filtered below
+  `SEARCH_MIN_SCORE` (default `0.2`) and sorted by relevance. Collecting per
+  query instead let one badly planned query fill the whole citation list — a
+  search for "RSC production limitations" returned the Royal Shakespeare
+  Company, and those hits outranked react.dev.
+- **The planner is told to spell acronyms out.** Ambiguous short names were the
+  root cause of that noise, so the planning prompt now requires self-contained
+  queries ("React Server Components", not "RSC").
 - **Search degrades gracefully.** Without `TAVILY_API_KEY` the pipeline still
   writes a report, it just cannot cite sources — the prompt switches to
   forbidding citations instead of inventing them.
