@@ -4,3 +4,10 @@ packages:
 
 allowBuilds:
   esbuild: true
+
+# pnpm 12 refuses to resolve packages published within `minimumReleaseAge`
+# minutes. Pinning it in the repo (instead of relying on each machine's global
+# pnpm config) is what makes installs reproducible on a contributor's laptop, in
+# CI and inside the Docker images. The supply-chain review happens on the
+# lockfile diff in review, which is where a human can judge a new dependency.
+minimumReleaseAge: 0

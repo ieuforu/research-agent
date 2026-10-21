@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { HTTPError, TimeoutError, type Options } from 'ky'
-import { ApiError, NetworkError, apiDelete, apiGet, apiPost, apiPut, http } from './http'
+import {
+  ApiError,
+  NetworkError,
+  apiDelete,
+  apiGet,
+  apiPost,
+  apiPut,
+  http,
+  setUnauthorizedHandler,
+} from './http'
 
 const options: Options = {
   prefix: 'https://example.test/api',
@@ -22,6 +31,7 @@ function jsonResponse(body: unknown, status = 200) {
 
 afterEach(() => {
   window.localStorage.clear()
+  setUnauthorizedHandler(null)
   vi.restoreAllMocks()
 })
 
@@ -218,4 +228,54 @@ it('preserves the API prefix, bearer token, JSON accept header, and request body
   expect(request.headers.get('Authorization')).toBe('Bearer test-token')
   expect(request.headers.get('Accept')).toBe('application/json')
   expect(requestBody).toEqual({ name: 'Ada' })
+})
+
+describe('unauthorized handling', () => {
+  it('clears the token and calls the handler once for an expired session', async () => {
+    const handler = vi.fn()
+    setUnauthorizedHandler(handler)
+    window.localStorage.setItem('auth_token', 'expired')
+
+    const fetch = vi.fn().mockResolvedValue(jsonResponse({ error: 'Unauthorized' }, 401))
+
+    await expect(apiGet('research', { ...options, fetch })).rejects.toBeInstanceOf(ApiError)
+
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not hijack a failed login or registration', async () => {
+    const handler = vi.fn()
+    setUnauthorizedHandler(handler)
+
+    for (const path of ['auth/login', 'auth/register']) {
+      const fetch = vi.fn().mockResolvedValue(jsonResponse({ error: 'Invalid' }, 401))
+
+      await expect(apiPost(path, { ...options, fetch, json: {} })).rejects.toBeInstanceOf(ApiError)
+    }
+
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('ignores non-401 failures', async () => {
+    const handler = vi.fn()
+    setUnauthorizedHandler(handler)
+
+    const fetch = vi.fn().mockResolvedValue(jsonResponse({ error: 'nope' }, 403))
+
+    await expect(apiGet('research', { ...options, fetch })).rejects.toBeInstanceOf(ApiError)
+
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('clears the stored token in the default handler', async () => {
+    window.localStorage.setItem('auth_token', 'expired')
+    setUnauthorizedHandler(() => {
+      window.localStorage.clear()
+    })
+
+    const fetch = vi.fn().mockResolvedValue(jsonResponse({}, 401))
+
+    await expect(apiGet('research', { ...options, fetch })).rejects.toBeInstanceOf(ApiError)
+    expect(window.localStorage.getItem('auth_token')).toBeNull()
+  })
 })

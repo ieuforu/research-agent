@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: lint, typecheck, test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: research
+          POSTGRES_PASSWORD: research_dev
+          POSTGRES_DB: research_agent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U research -d research_agent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # The server tests create and migrate their own <database>_test database.
+      DATABASE_URL: postgresql://research:research_dev@localhost:5432/research_agent
+      # Placeholders: no test talks to DeepSeek or Tavily, they are mocked.
+      JWT_SECRET: ci-only-secret
+      DEEPSEEK_API_KEY: ci-placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+
+  docker:
+    name: images build and the stack boots
+    runs-on: ubuntu-latest
+    needs: check
+    env:
+      JWT_SECRET: ci-only-secret
+      DEEPSEEK_API_KEY: ci-placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose build
+      # Proves migrations run, the server survives startup with a placeholder
+      # key, and nginx can reach it — the three things a Dockerfile change breaks.
+      - run: docker compose up -d
+      - name: Wait for the stack to report healthy
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/api/health > /dev/null; then
+              echo "stack is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "stack did not become healthy" >&2
+          docker compose logs
+          exit 1
+      - name: Fail on container restarts
+        run: |
+          docker compose ps
+          test -z "$(docker compose ps --status restarting -q)"
+      - if: always()
+        run: docker compose down -v

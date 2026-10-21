@@ -17,18 +17,37 @@ Router/Query, Fastify 5, Drizzle, Postgres, SSE streaming), not as a product.
 | LLM / search | DeepSeek (`openai` SDK, OpenAI-compatible) + Tavily (optional)        |
 | Tooling      | oxlint, oxfmt, TypeScript 7 native (`tsc`), `tsrs` as a fast checker  |
 
-## Quick start
+## Quick start — Docker (recommended)
+
+```bash
+cp .env.example .env        # fill in JWT_SECRET and DEEPSEEK_API_KEY
+docker compose up -d --build
+```
+
+Open <http://localhost:8080>, register, and ask a question. That is the whole
+setup: postgres, migrations, the API and the built frontend all come up in one
+command. `JWT_SECRET` and `DEEPSEEK_API_KEY` have no insecure defaults on
+purpose — compose fails with a message telling you which one is missing.
+
+| Service    | Image                | Notes                                               |
+| ---------- | -------------------- | --------------------------------------------------- |
+| `postgres` | `postgres:17-alpine` | named volume, healthchecked                         |
+| `server`   | `server/Dockerfile`  | runs migrations, then binds `:3000` (not published) |
+| `web`      | `web/Dockerfile`     | nginx on `:8080`, serves the SPA and proxies `/api` |
+
+## Quick start — local dev
 
 ```bash
 pnpm install
-docker compose up -d          # postgres on :5432
-cp server/.env.example server/.env   # then fill in DEEPSEEK_API_KEY
+docker compose up -d postgres          # only the database
+cp server/.env.example server/.env     # then fill in DEEPSEEK_API_KEY and JWT_SECRET
 pnpm --filter server db:migrate
-pnpm dev:server               # :3000
-pnpm dev:web                  # :5173 (proxies /api to :3000)
+pnpm dev:server                        # :3000
+pnpm dev:web                           # :5173 (proxies /api to :3000)
 ```
 
-Open <http://localhost:5173/research>.
+Open <http://localhost:5173>. The dev server proxies `/api` to `:3000`, so the
+same frontend build works in both setups.
 
 ## Commands
 
@@ -83,6 +102,15 @@ Open <http://localhost:5173/research>.
 - **SSE clients must close on terminal events.** `EventSource` reconnects on its
   own; the stream client closes on `done`/`error` to avoid replaying a finished
   task forever. The page keeps polling as a fallback if the stream breaks.
+- **The container runs migrations before it listens.** `node dist/migrate.js &&
+node dist/index.js`; the migrator reads the committed `drizzle/` folder, so a
+  deployed schema is always reproducible from files in the repo.
+- **`minimumReleaseAge` is pinned in `pnpm-workspace.yaml`.** pnpm 12 refuses
+  packages published within that window; relying on each machine's global pnpm
+  config instead would make Docker and CI builds fail for reasons nobody can see
+  locally.
+- **nginx disables proxying buffering on `/api/`.** Without it the SSE stream is
+  buffered and the report appears all at once at the end.
 - **`web/src/routeTree.gen.ts` is committed on purpose.** `tsc` needs it, so a
   fresh clone can run `pnpm check` in CI without a dev server first.
 
@@ -131,4 +159,6 @@ migrated by `test/global-setup.ts`, so they never touch development data.
   marks stale rows as failed, it does not resume them)
 - no refresh tokens, no logout invalidation (the JWT stays valid until it expires)
 - no rate limiting, so a logged-in user can burn the model quota freely
-- no CI workflow, no Dockerfile for the app itself
+- no rate limiting, no request tracing or metrics endpoint
+- single replica only: migrations on start and in-process task execution both
+  assume one instance

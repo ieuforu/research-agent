@@ -1,4 +1,4 @@
-import { getAuthToken } from '#/lib/auth.ts'
+import { clearAuthToken, getAuthToken } from '#/lib/auth.ts'
 import ky, { isHTTPError, type KyInstance, type Options } from 'ky'
 
 export { NetworkError, TimeoutError } from 'ky'
@@ -27,6 +27,27 @@ export function apiUrl(path: string): string {
   return `${base}${suffix}`
 }
 
+// --- Unauthorized handling ---
+// The token is a JWT with a fixed lifetime: once it expires every request fails
+// with 401. Redirecting once is friendlier than leaving the user on a page full
+// of "Unauthorized" errors, but the login request itself must not trigger it or
+// a wrong password would reload the page instead of showing an error.
+const CREDENTIAL_PATHS = ['/auth/login', '/auth/register']
+
+function defaultUnauthorizedHandler() {
+  clearAuthToken()
+
+  if (!window.location.pathname.startsWith('/login')) {
+    window.location.assign('/login')
+  }
+}
+
+let unauthorizedHandler: () => void = defaultUnauthorizedHandler
+
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  unauthorizedHandler = handler ?? defaultUnauthorizedHandler
+}
+
 // --- Ky instance ---
 export const http: KyInstance = ky.create({
   prefix: API_PREFIX,
@@ -39,6 +60,18 @@ export const http: KyInstance = ky.create({
       (state) => {
         const token = getAuthToken()
         if (token) state.request.headers.set('Authorization', `Bearer ${token}`)
+      },
+    ],
+    afterResponse: [
+      // ky 2 passes a single object here, unlike the positional hooks of ky 1.
+      ({ request, response }) => {
+        const isCredentialRequest = CREDENTIAL_PATHS.some((path) => request.url.includes(path))
+
+        if (response.status === 401 && !isCredentialRequest) {
+          unauthorizedHandler()
+        }
+
+        return response
       },
     ],
     beforeError: [
