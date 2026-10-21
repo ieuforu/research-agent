@@ -8,8 +8,11 @@ dist
 .gitignore
 .github
 **/*.log
-.env
-.env.*
+# Docker matches a pattern without a slash only at the context root, so `server/.env`
+# needs the **/ form. The build stage copies server/ wholesale, and an .env in a
+# layer is an .env in the cache even if the final stage never uses it.
+**/.env
+**/.env.*
 !**/.env.example
 coverage
 **/*.test.ts
