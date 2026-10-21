@@ -34,9 +34,9 @@ jobs:
       JWT_SECRET: ci-only-secret
       DEEPSEEK_API_KEY: ci-placeholder
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -51,7 +51,7 @@ jobs:
       JWT_SECRET: ci-only-secret
       DEEPSEEK_API_KEY: ci-placeholder
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: docker compose build
       # Proves migrations run, the server survives startup with a placeholder
       # key, and nginx can reach it — the three things a Dockerfile change breaks.

@@ -1,5 +1,7 @@
 # research-agent
 
+[![ci](https://github.com/ieuforu/research-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/ieuforu/research-agent/actions/workflows/ci.yml)
+
 A small research workbench: submit a question, the backend plans search queries,
 retrieves sources, and streams a cited report back to the browser.
 
